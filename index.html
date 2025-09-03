@@ -19,7 +19,12 @@
     gap: 10px; padding: 10px; border-radius: 10px; position: relative;
   }
   .tile { border-radius: 5px; display: flex; justify-content: center; align-items: center; font-weight: bold; font-size: 24px; position: relative; }
-  .tile img { max-width: 80%; max-height: 80%; border-radius: 5px; }
+ .tile img {
+  width: 87%;
+  height: 87%;
+  object-fit: contain; /* чтобы не искажалась */
+  border-radius: 10px;
+  }
   .tile .value-label {
     position: absolute; top: 5px; left: 5px; font-size: 14px;
     background: rgba(255,255,255,0.5); padding: 2px 5px; border-radius: 3px; pointer-events: none;
@@ -30,12 +35,46 @@
     font-size: 32px; font-weight: bold; color: #776e65; display: none; border-radius: 10px;
     flex-direction: column; gap: 10px; z-index: 10;
   }
+
   button {
     padding: 10px 20px; font-size: 16px; border-radius: 5px; border: none; cursor: pointer;
     margin-top: 10px; background: #8f7a66; color: white;
   }
   button:hover { background: #9f8b77; }
   #mobile-controls { margin-top: 10px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+
+  /* Animation overlay for smooth tile movement */
+  #tiles-anim-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .anim-tile {
+    position: absolute;
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    font-size: 24px;
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+    overflow: hidden;
+  }
+  .anim-tile .value-label {
+    position: absolute; top: 5px; left: 5px; font-size: 14px;
+    background: rgba(255,255,255,0.5); padding: 2px 5px; border-radius: 3px; pointer-events: none;
+  }
+
+  /* New-tile spawn animation */
+  @keyframes spawn-pop {
+    0% { transform: scale(0.85); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .tile.spawn {
+    animation: spawn-pop 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
 
 /* На маленьких экранах увеличиваем поле */
 @media (max-width: 600px) {
@@ -45,6 +84,7 @@
     gap: 12px; /* чуть больше отступ между плитками */
     padding: 12px;
   }
+  
   .tile {
     font-size: 28px; /* чуть крупнее цифры */
   }
@@ -67,7 +107,6 @@
   <div id="score" class="score-box">Счёт: 0</div>
   <div id="best" class="score-box">Рекорд: 0</div>
 </div>
-
 <div id="game-container">
   <div id="overlay">
     <div>Игра окончена!</div>
@@ -91,36 +130,97 @@ let touchStartX=0, touchStartY=0;
 
 const images={2:"img2.png",4:"img4.png",8:"img8.png",16:"img16.png",32:"img32.png",
 64:"img64.png",128:"img128.png",256:"img256.png",512:"img512.png",1024:"img1024.png",2048:"img2048.png"};
-const colors={2:"#eee4da",4:"#ede0c8",8:"#f2b179",16:"#f59563",32:"#f67c5f",
-64:"#f65e3b",128:"#edcf72",256:"#edcc61",512:"#edc850",1024:"#edc53f",2048:"#edc22e"};
-
+const colors = {
+  2: "#ffb3ba",   // нежно-розовый
+  4: "#ffdfba",   // персиковый
+  8: "#ffffba",   // светло-жёлтый
+  16: "#baffc9",  // мятный
+  32: "#bae1ff",  // нежно-голубой
+  64: "#d5b3ff",  // светло-фиолетовый
+  128: "#ffb3ec", // розовый неон
+  256: "#ff9cee", // ярче розовый
+  512: "#9cf6ff", // ярко-голубой
+  1024: "#92f7e6",// мятно-неоновый
+  2048: "#f7b2ad" // коралловый
+};
 function getImage(v){return images[v]||"";}
 function getColor(v){return colors[v]||"#3c3a32";}
-function getLabelColor(v){return v<=4?"#776e65":"#fff";}
+function getLabelColor(v) {
+  const bg = getColor(v); // получаем цвет плитки
+  // Парсим HEX → получаем яркость
+  const r = parseInt(bg.substr(1,2),16);
+  const g = parseInt(bg.substr(3,2),16);
+  const b = parseInt(bg.substr(5,2),16);
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  return brightness > 140 ? "#333" : "#fff"; // если фон светлый → тёмный текст, если тёмный → белый
+}
+
+// Animation tuning
+const MOVE_MS = 280;
+const MOVE_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
 function updateScore(points){score+=points;
 if(score>bestScore){bestScore=score; localStorage.setItem("bestScore",bestScore);}
 document.getElementById("score").textContent="Счёт: "+score;
 document.getElementById("best").textContent="Рекорд: "+bestScore;}
 
-function initGrid(){grid=Array(size).fill(null).map(()=>Array(size).fill(0));
-score=0; updateScore(0); addRandomTile(); addRandomTile(); render(); hideGameOver();}
+function initGrid(){
+  grid=Array(size).fill(null).map(()=>Array(size).fill(0));
+  score=0; updateScore(0);
+  const s1 = addRandomTile();
+  const s2 = addRandomTile();
+  renderGrid(grid, [s1, s2]);
+  hideGameOver();
+}
 
-function addRandomTile(){const empty=[];for(let i=0;i<size;i++){for(let j=0;j<size;j++){if(grid[i][j]===0) empty.push({i,j});}}
-if(empty.length){const {i,j}=empty[Math.floor(Math.random()*empty.length)]; grid[i][j]=Math.random()<0.9?2:4;}}
+function addRandomTile(){
+  const empty=[];for(let i=0;i<size;i++){for(let j=0;j<size;j++){if(grid[i][j]===0) empty.push({i,j});}}
+  if(empty.length){
+    const {i,j}=empty[Math.floor(Math.random()*empty.length)];
+    const variants = [2, 4, 8]; // плитки, которые могут появляться
+    const value = variants[Math.floor(Math.random() * variants.length)];
+    grid[i][j] = value;
+    return { i, j, value };
+  }
+  return null;
+}
+function checkWin() {
+  for (let i = 0; i < size; i++) {
+    for (let j = 0; j < size; j++) {
+      if (grid[i][j] === 2048) {
+        document.getElementById('win-overlay').style.visibility = 'visible';
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function continueGame() {
+  document.getElementById('win-overlay').style.visibility = 'hidden';
+}
 
-function render(){
-const container=document.getElementById("game-container");
-const overlay=document.getElementById("overlay");
-container.innerHTML=""; container.appendChild(overlay);
+function renderGrid(data, spawns){
+  const container=document.getElementById("game-container");
+  const overlay=document.getElementById("overlay");
+  container.innerHTML=""; container.appendChild(overlay);
 
-for(let i=0;i<size;i++){for(let j=0;j<size;j++){
-const tile=document.createElement("div"); tile.className="tile"; const value=grid[i][j];
-tile.style.backgroundColor=getColor(value);
-if(value){const img=document.createElement("img"); img.src=getImage(value); img.alt=value; tile.appendChild(img);
-const label=document.createElement("div"); label.className="value-label"; label.textContent=value;
-label.style.color=getLabelColor(value); tile.appendChild(label);}
-container.appendChild(tile);}}}
+  for(let i=0;i<size;i++){
+    for(let j=0;j<size;j++){
+      const tile=document.createElement("div");
+      const isSpawn = Array.isArray(spawns) && spawns.some(s => s && s.i===i && s.j===j);
+      tile.className = "tile" + (isSpawn ? " spawn" : "");
+      const value=data[i][j];
+      tile.style.backgroundColor=getColor(value);
+      if(value){
+        const img=document.createElement("img"); img.src=getImage(value); img.alt=value; tile.appendChild(img);
+        const label=document.createElement("div"); label.className="value-label"; label.textContent=value;
+        label.style.color=getLabelColor(value); tile.appendChild(label);
+      }
+      container.appendChild(tile);
+    }
+  }
+}
+function render(){ renderGrid(grid); }
 
 function slide(row){let arr=row.filter(v=>v!==0); for(let i=0;i<arr.length-1;i++){if(arr[i]===arr[i+1]){arr[i]*=2; updateScore(arr[i]); arr[i+1]=0;}} arr=arr.filter(v=>v!==0); while(arr.length<size) arr.push(0); return arr;}
 function moveLeft(){let moved=false; for(let i=0;i<size;i++){const newRow=slide(grid[i]); if(grid[i].toString()!==newRow.toString()) moved=true; grid[i]=newRow;} return moved;}
@@ -136,27 +236,321 @@ document.getElementById("final-best").textContent="Рекорд: "+bestScore; do
 function hideGameOver(){document.getElementById("overlay").style.display="none";}
 function restartGame(){initGrid();}
 
-function move(dir){let moved=false; switch(dir){case 'up': moved=moveUp(); break; case 'down': moved=moveDown(); break; case 'left': moved=moveLeft(); break; case 'right': moved=moveRight(); break;} 
-if(moved){addRandomTile(); render(); if(isGameOver()) showGameOver();}}
+let isAnimating=false;
 
-document.addEventListener("keydown", e=>{let moved=false; switch(e.key){case "ArrowLeft": moved=moveLeft(); break;
-case "ArrowRight": moved=moveRight(); break; case "ArrowUp": moved=moveUp(); break; case "ArrowDown": moved=moveDown(); break;}
-if(moved){addRandomTile(); render(); if(isGameOver()) showGameOver();}});
+function getLayout() {
+  const container = document.getElementById('game-container');
+  const cs = getComputedStyle(container);
+  const pad = parseFloat(cs.paddingLeft) || 0; // symmetric padding used
+  const gap = parseFloat(cs.gap || cs.gridGap) || 10;
+  const innerW = container.clientWidth - pad * 2;
+  const cell = (innerW - gap * (size - 1)) / size;
+  return { pad, gap, cell };
+}
 
-const gameContainer = document.getElementById("game-container");
-gameContainer.addEventListener('touchstart', e=>{
-  const touch=e.touches[0]; touchStartX=touch.clientX; touchStartY=touch.clientY;
-  e.preventDefault();
+function cellPos(i, j, layout) {
+  return {
+    x: layout.pad + j * (layout.cell + layout.gap),
+    y: layout.pad + i * (layout.cell + layout.gap)
+  };
+}
+
+function ensureAnimLayer() {
+  const container = document.getElementById('game-container');
+  let layer = document.getElementById('tiles-anim-layer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'tiles-anim-layer';
+    container.appendChild(layer);
+  }
+  layer.innerHTML = '';
+  return layer;
+}
+
+function createTileVisual(value, sizePx) {
+  const tile = document.createElement('div');
+  tile.className = 'anim-tile';
+  tile.style.width = sizePx + 'px';
+  tile.style.height = sizePx + 'px';
+  tile.style.backgroundColor = getColor(value);
+  tile.style.transition = `transform ${MOVE_MS}ms ${MOVE_EASE}`;
+  if (value) {
+    const img = document.createElement('img');
+    img.src = getImage(value);
+    img.alt = value;
+    img.style.width = '87%';
+    img.style.height = '87%';
+    img.style.objectFit = 'contain';
+    img.style.borderRadius = '10px';
+    tile.appendChild(img);
+    const label = document.createElement('div');
+    label.className = 'value-label';
+    label.textContent = value;
+    label.style.color = getLabelColor(value);
+    tile.appendChild(label);
+  }
+  return tile;
+}
+
+function animateMoves(moves, onDone) {
+  if (!moves || moves.length === 0) { onDone(); return; }
+  const layer = ensureAnimLayer();
+  const layout = getLayout();
+
+  const els = [];
+  for (const m of moves) {
+    const el = createTileVisual(m.value, layout.cell);
+    const from = cellPos(m.fromI, m.fromJ, layout);
+    el.style.transform = `translate3d(${from.x}px, ${from.y}px, 0)`;
+    layer.appendChild(el);
+    els.push({ el, m });
+  }
+
+  // force layout
+  // eslint-disable-next-line no-unused-expressions
+  layer.offsetWidth;
+
+  requestAnimationFrame(() => {
+    // Use transitionend instead of fixed timeout for smoothness
+    let pending = els.length;
+    let doneCalled = false;
+    const done = () => {
+      if (doneCalled) return;
+      doneCalled = true;
+      layer.innerHTML = '';
+      onDone();
+    };
+    for (const { el, m } of els) {
+      const to = cellPos(m.toI, m.toJ, layout);
+      const onEnd = (e) => {
+        if (e.propertyName === 'transform') {
+          el.removeEventListener('transitionend', onEnd);
+          pending -= 1;
+          if (pending === 0) done();
+        }
+      };
+      el.addEventListener('transitionend', onEnd);
+      // trigger move
+      el.style.transform = `translate3d(${to.x}px, ${to.y}px, 0)`;
+    }
+    // Fallback in case transitionend is missed
+    setTimeout(done, MOVE_MS + 60);
+  });
+}
+
+function buildTempGridAndAnimList(res){
+  // Clone current grid
+  const temp = grid.map(row => row.slice());
+  const mergedDest = new Set(res.moves.filter(m=>m.merged).map(m=>`${m.toI},${m.toJ}`));
+  const anim = [];
+
+  // First, move anchors instantly to their destination for merges
+  for (const m of res.moves) {
+    const key = `${m.toI},${m.toJ}`;
+    if (!m.merged && mergedDest.has(key)) {
+      // This is the anchor: relocate instantly in base
+      if (temp[m.fromI][m.fromJ] !== 0) temp[m.fromI][m.fromJ] = 0;
+      temp[m.toI][m.toJ] = m.value;
+      // Do not animate anchor
+    }
+  }
+
+  // Now, schedule animations and clear sources in base for moving tiles
+  for (const m of res.moves) {
+    const key = `${m.toI},${m.toJ}`;
+    if (m.merged) {
+      // Trailing tile moves into anchor
+      if (temp[m.fromI][m.fromJ] !== 0) temp[m.fromI][m.fromJ] = 0;
+      anim.push(m);
+    } else if (!mergedDest.has(key)) {
+      // Normal move without merge
+      if (m.fromI !== m.toI || m.fromJ !== m.toJ) {
+        if (temp[m.fromI][m.fromJ] !== 0) temp[m.fromI][m.fromJ] = 0;
+        anim.push(m);
+      }
+    }
+  }
+
+  return { tempGrid: temp, animMoves: anim };
+}
+
+function computeMoveLeft() {
+  let moved = false;
+  let points = 0;
+  const newGrid = Array(size).fill(null).map(() => Array(size).fill(0));
+  const moves = [];
+  for (let i = 0; i < size; i++) {
+    const items = [];
+    for (let j = 0; j < size; j++) if (grid[i][j] !== 0) items.push({ value: grid[i][j], fromJ: j });
+    const result = [];
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (result.length && result[result.length - 1].value === it.value && !result[result.length - 1].merged) {
+        const destJ = result[result.length - 1].toJ;
+        result[result.length - 1].value *= 2;
+        points += result[result.length - 1].value;
+        result[result.length - 1].merged = true;
+        moves.push({ fromI: i, fromJ: it.fromJ, toI: i, toJ: destJ, value: it.value, merged: true });
+        if (it.fromJ !== destJ) moved = true;
+      } else {
+        const destJ = result.length;
+        result.push({ value: it.value, toJ: destJ, merged: false });
+        moves.push({ fromI: i, fromJ: it.fromJ, toI: i, toJ: destJ, value: it.value, merged: false });
+        if (it.fromJ !== destJ) moved = true;
+      }
+    }
+    for (let j = 0; j < result.length; j++) newGrid[i][j] = result[j].value;
+  }
+  return { moved, newGrid, moves, points };
+}
+
+function computeMoveRight() {
+  let moved = false;
+  let points = 0;
+  const newGrid = Array(size).fill(null).map(() => Array(size).fill(0));
+  const moves = [];
+  for (let i = 0; i < size; i++) {
+    const items = [];
+    for (let j = size - 1; j >= 0; j--) if (grid[i][j] !== 0) items.push({ value: grid[i][j], fromJ: j });
+    const result = [];
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (result.length && result[result.length - 1].value === it.value && !result[result.length - 1].merged) {
+        const destJ = result[result.length - 1].toJ;
+        result[result.length - 1].value *= 2;
+        points += result[result.length - 1].value;
+        result[result.length - 1].merged = true;
+        moves.push({ fromI: i, fromJ: it.fromJ, toI: i, toJ: destJ, value: it.value, merged: true });
+        if (it.fromJ !== destJ) moved = true;
+      } else {
+        const destJ = size - 1 - result.length;
+        result.push({ value: it.value, toJ: destJ, merged: false });
+        moves.push({ fromI: i, fromJ: it.fromJ, toI: i, toJ: destJ, value: it.value, merged: false });
+        if (it.fromJ !== destJ) moved = true;
+      }
+    }
+    for (let j = 0; j < result.length; j++) newGrid[i][result[j].toJ] = result[j].value;
+  }
+  return { moved, newGrid, moves, points };
+}
+
+function computeMoveUp() {
+  let moved = false;
+  let points = 0;
+  const newGrid = Array(size).fill(null).map(() => Array(size).fill(0));
+  const moves = [];
+  for (let j = 0; j < size; j++) {
+    const items = [];
+    for (let i = 0; i < size; i++) if (grid[i][j] !== 0) items.push({ value: grid[i][j], fromI: i });
+    const result = [];
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (result.length && result[result.length - 1].value === it.value && !result[result.length - 1].merged) {
+        const destI = result[result.length - 1].toI;
+        result[result.length - 1].value *= 2;
+        points += result[result.length - 1].value;
+        result[result.length - 1].merged = true;
+        moves.push({ fromI: it.fromI, fromJ: j, toI: destI, toJ: j, value: it.value, merged: true });
+        if (it.fromI !== destI) moved = true;
+      } else {
+        const destI = result.length;
+        result.push({ value: it.value, toI: destI, merged: false });
+        moves.push({ fromI: it.fromI, fromJ: j, toI: destI, toJ: j, value: it.value, merged: false });
+        if (it.fromI !== destI) moved = true;
+      }
+    }
+    for (let i = 0; i < result.length; i++) newGrid[i][j] = result[i].value;
+  }
+  return { moved, newGrid, moves, points };
+}
+
+function computeMoveDown() {
+  let moved = false;
+  let points = 0;
+  const newGrid = Array(size).fill(null).map(() => Array(size).fill(0));
+  const moves = [];
+  for (let j = 0; j < size; j++) {
+    const items = [];
+    for (let i = size - 1; i >= 0; i--) if (grid[i][j] !== 0) items.push({ value: grid[i][j], fromI: i });
+    const result = [];
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      if (result.length && result[result.length - 1].value === it.value && !result[result.length - 1].merged) {
+        const destI = result[result.length - 1].toI;
+        result[result.length - 1].value *= 2;
+        points += result[result.length - 1].value;
+        result[result.length - 1].merged = true;
+        moves.push({ fromI: it.fromI, fromJ: j, toI: destI, toJ: j, value: it.value, merged: true });
+        if (it.fromI !== destI) moved = true;
+      } else {
+        const destI = size - 1 - result.length;
+        result.push({ value: it.value, toI: destI, merged: false });
+        moves.push({ fromI: it.fromI, fromJ: j, toI: destI, toJ: j, value: it.value, merged: false });
+        if (it.fromI !== destI) moved = true;
+      }
+    }
+    for (let i = 0; i < result.length; i++) newGrid[result[i].toI][j] = result[i].value;
+  }
+  return { moved, newGrid, moves, points };
+}
+
+function move(dir){
+  if (isAnimating) return;
+  let res;
+  switch(dir){
+    case 'up': res = computeMoveUp(); break;
+    case 'down': res = computeMoveDown(); break;
+    case 'left': res = computeMoveLeft(); break;
+    case 'right': res = computeMoveRight(); break;
+    default: return;
+  }
+  if (!res.moved) return;
+  isAnimating = true;
+  const { tempGrid, animMoves } = buildTempGridAndAnimList(res);
+  // Render base with anchors already at destination and moving sources cleared
+  renderGrid(tempGrid);
+  animateMoves(animMoves, () => {
+    grid = res.newGrid;
+    if (res.points) updateScore(res.points);
+    const spawn = addRandomTile();
+    renderGrid(grid, spawn ? [spawn] : undefined);
+    checkWin();
+    if (isGameOver()) showGameOver();
+    isAnimating = false;
+  });
+}
+
+document.addEventListener("keydown", e=>{
+  switch(e.key){
+    case "ArrowLeft": move('left'); break;
+    case "ArrowRight": move('right'); break;
+    case "ArrowUp": move('up'); break;
+    case "ArrowDown": move('down'); break;
+  }
 });
-gameContainer.addEventListener('touchend', e=>{
-  const touch=e.changedTouches[0];
-  const dx=touch.clientX-touchStartX; const dy=touch.clientY-touchStartY;
-  if(Math.abs(dx)>Math.abs(dy)){ if(dx>30) move('right'); else if(dx<-30) move('left'); }
-  else{ if(dy>30) move('down'); else if(dy<-30) move('up'); }
-  e.preventDefault();
-});
 
-initGrid();
+document.addEventListener('DOMContentLoaded', () => {
+  const gameContainer = document.getElementById('game-container');
+  if (!gameContainer) {
+    console.error('Missing #game-container');
+    return;
+  }
+
+  gameContainer.addEventListener('touchstart', e=>{
+    const touch=e.touches[0]; touchStartX=touch.clientX; touchStartY=touch.clientY;
+    e.preventDefault();
+  }, { passive: false });
+
+  gameContainer.addEventListener('touchend', e=>{
+    const touch=e.changedTouches[0];
+    const dx=touch.clientX-touchStartX; const dy=touch.clientY-touchStartY;
+    if(Math.abs(dx)>Math.abs(dy)){ if(dx>30) move('right'); else if(dx<-30) move('left'); }
+    else{ if(dy>30) move('down'); else if(dy<-30) move('up'); }
+    e.preventDefault();
+  }, { passive: false });
+
+  initGrid();
+});
 </script>
 </body>
 </html>
